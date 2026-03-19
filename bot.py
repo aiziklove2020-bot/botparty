@@ -8,128 +8,218 @@ from telegram.ext import (
 from config import BOT_TOKEN, ADMIN_IDS
 from database import Database
 
-# הגדרת לוגים
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# שלבי שיחה
 BROADCAST_MESSAGE, BROADCAST_CONFIRM = range(2)
 ADD_CHANNEL, REMOVE_CHANNEL = range(2, 4)
 BAN_USER, UNBAN_USER = range(4, 6)
+(EVENT_NAME, EVENT_DJ, EVENT_LOCATION, EVENT_DATE, EVENT_LINK, EVENT_FLYER, EVENT_CONFIRM) = range(6, 13)
 
 db = Database()
-
-# ===================== פונקציות עזר =====================
 
 def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
 
-def admin_required(func):
-    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user_id = update.effective_user.id
-        if not is_admin(user_id):
-            await update.message.reply_text("⛔ אין לך הרשאה לפקודה זו.")
-            return
-        return await func(update, context)
-    return wrapper
-
-# ===================== תפריט ראשי =====================
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db.add_user(user.id, user.username or "", user.first_name or "")
-
     if is_admin(user.id):
         await show_admin_panel(update, context)
     else:
         keyboard = [[InlineKeyboardButton("📢 ערוצים וקבוצות", callback_data="show_channels")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
         await update.message.reply_text(
-            f"👋 שלום {user.first_name}!\nברוך הבא לבוט שלנו.",
-            reply_markup=reply_markup
+            f"👋 שלום {user.first_name}!\nברוך הבא לבוט מסיבות בישראל 🎉",
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
-
-# ===================== פאנל אדמין =====================
 
 async def show_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [InlineKeyboardButton("📢 פרסום להכל", callback_data="broadcast"),
-         InlineKeyboardButton("📋 ניהול ערוצים", callback_data="manage_channels")],
-        [InlineKeyboardButton("👥 ניהול משתמשים", callback_data="manage_users"),
-         InlineKeyboardButton("📊 סטטיסטיקות", callback_data="stats")],
-        [InlineKeyboardButton("🔔 הודעה לאדמין", callback_data="admin_msg")],
+        [InlineKeyboardButton("🎉 פרסום אירוע", callback_data="event_publish"),
+         InlineKeyboardButton("📢 פרסום חופשי", callback_data="broadcast")],
+        [InlineKeyboardButton("📋 ניהול ערוצים", callback_data="manage_channels"),
+         InlineKeyboardButton("👥 ניהול משתמשים", callback_data="manage_users")],
+        [InlineKeyboardButton("📊 סטטיסטיקות", callback_data="stats")],
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    text = "🛠 *פאנל ניהול אדמין*\n\nבחר פעולה:"
-
+    text = "🛠 *פאנל ניהול אדמין — מסיבות בישראל*\n\nבחר פעולה:"
     if update.message:
-        await update.message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
     else:
-        await update.callback_query.edit_message_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+        await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
-# ===================== פרסום =====================
+# ===== פרסום אירוע =====
+
+async def event_publish_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    context.user_data['event'] = {}
+    keyboard = [[InlineKeyboardButton("❌ ביטול", callback_data="admin_panel")]]
+    await query.edit_message_text(
+        "🎉 *פרסום אירוע חדש*\n\n*שלב 1/6* — מה *שם האירוע*?\n\nלדוגמה: `TECHNO NIGHT TEL AVIV`",
+        reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown"
+    )
+    return EVENT_NAME
+
+async def event_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['event']['name'] = update.message.text.strip()
+    keyboard = [[InlineKeyboardButton("⏭ דלג", callback_data="skip_dj")]]
+    await update.message.reply_text(
+        "🎧 *שלב 2/6* — מי ה-*DJ/ים*?\n\nלדוגמה: `Shlomi Aber`",
+        reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown"
+    )
+    return EVENT_DJ
+
+async def event_dj(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['event']['dj'] = update.message.text.strip()
+    await update.message.reply_text("📍 *שלב 3/6* — *מיקום*\n\nלדוגמה: `The Block, תל אביב`", parse_mode="Markdown")
+    return EVENT_LOCATION
+
+async def event_skip_dj(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    context.user_data['event']['dj'] = None
+    await query.edit_message_text("📍 *שלב 3/6* — *מיקום*\n\nלדוגמה: `The Block, תל אביב`", parse_mode="Markdown")
+    return EVENT_LOCATION
+
+async def event_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['event']['location'] = update.message.text.strip()
+    await update.message.reply_text("📅 *שלב 4/6* — *תאריך ושעה*\n\nלדוגמה: `שישי 21.03 | 23:00`", parse_mode="Markdown")
+    return EVENT_DATE
+
+async def event_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['event']['date'] = update.message.text.strip()
+    keyboard = [[InlineKeyboardButton("⏭ דלג", callback_data="skip_link")]]
+    await update.message.reply_text(
+        "🔗 *שלב 5/6* — *לינק לכרטיסים*\n\nאם אין — לחץ דלג",
+        reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown"
+    )
+    return EVENT_LINK
+
+async def event_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['event']['link'] = update.message.text.strip()
+    keyboard = [[InlineKeyboardButton("⏭ דלג (ללא פליייר)", callback_data="skip_flyer")]]
+    await update.message.reply_text(
+        "📸 *שלב 6/6* — שלח *פליייר/תמונה*\n\nאו לחץ דלג",
+        reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown"
+    )
+    return EVENT_FLYER
+
+async def event_skip_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    context.user_data['event']['link'] = None
+    keyboard = [[InlineKeyboardButton("⏭ דלג (ללא פליייר)", callback_data="skip_flyer")]]
+    await query.edit_message_text(
+        "📸 *שלב 6/6* — שלח *פליייר/תמונה*\n\nאו לחץ דלג",
+        reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown"
+    )
+    return EVENT_FLYER
+
+async def event_flyer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.photo:
+        context.user_data['event']['flyer'] = update.message.photo[-1].file_id
+    else:
+        context.user_data['event']['flyer'] = None
+    await show_event_preview(update, context)
+    return EVENT_CONFIRM
+
+async def event_skip_flyer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    context.user_data['event']['flyer'] = None
+    await show_event_preview_query(query, context)
+    return EVENT_CONFIRM
+
+def build_event_text(event: dict) -> str:
+    lines = ["🎉 *אירוע חדש — מסיבות בישראל* 🎉", "", f"🎪 *{event['name']}*", ""]
+    if event.get('dj'):
+        lines.append(f"🎧 *DJ:* {event['dj']}")
+    lines.append(f"📍 *מיקום:* {event['location']}")
+    lines.append(f"📅 *מתי:* {event['date']}")
+    if event.get('link'):
+        lines.append(f"🎟 *כרטיסים:* {event['link']}")
+    lines += ["", "🔥 *מסיבות בישראל* — הקהילה שלנו מחכה לך!"]
+    return "\n".join(lines)
+
+async def show_event_preview(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    event = context.user_data['event']
+    text = build_event_text(event)
+    channels = db.get_channels()
+    channels_text = "\n".join([f"• {ch['name']}" for ch in channels]) if channels else "• אין ערוצים"
+    keyboard = [[InlineKeyboardButton("✅ פרסם עכשיו!", callback_data="confirm_event"),
+                 InlineKeyboardButton("❌ ביטול", callback_data="admin_panel")]]
+    preview = f"👁 *תצוגה מקדימה:*\n\n{text}\n\n📊 ישלח ל:\n{channels_text}\n👥 {db.get_users_count()} משתמשים"
+    if event.get('flyer'):
+        await update.message.reply_photo(event['flyer'], caption=preview, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    else:
+        await update.message.reply_text(preview, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+async def show_event_preview_query(query, context: ContextTypes.DEFAULT_TYPE):
+    event = context.user_data['event']
+    text = build_event_text(event)
+    channels = db.get_channels()
+    channels_text = "\n".join([f"• {ch['name']}" for ch in channels]) if channels else "• אין ערוצים"
+    keyboard = [[InlineKeyboardButton("✅ פרסם עכשיו!", callback_data="confirm_event"),
+                 InlineKeyboardButton("❌ ביטול", callback_data="admin_panel")]]
+    preview = f"👁 *תצוגה מקדימה:*\n\n{text}\n\n📊 ישלח ל:\n{channels_text}\n👥 {db.get_users_count()} משתמשים"
+    await query.edit_message_text(preview, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+async def event_confirm_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    event = context.user_data.get('event', {})
+    text = build_event_text(event)
+    success, failed = 0, 0
+    for channel in db.get_channels():
+        try:
+            if event.get('flyer'):
+                await context.bot.send_photo(channel['chat_id'], event['flyer'], caption=text, parse_mode="Markdown")
+            else:
+                await context.bot.send_message(channel['chat_id'], text, parse_mode="Markdown")
+            success += 1
+        except Exception as e:
+            logger.error(f"Channel error: {e}")
+            failed += 1
+    for user in db.get_all_users():
+        try:
+            if event.get('flyer'):
+                await context.bot.send_photo(user['user_id'], event['flyer'], caption=text, parse_mode="Markdown")
+            else:
+                await context.bot.send_message(user['user_id'], text, parse_mode="Markdown")
+            success += 1
+            await asyncio.sleep(0.05)
+        except:
+            failed += 1
+    await query.edit_message_text(f"✅ *האירוע פורסם!*\n\n✔️ {success}\n❌ {failed}", parse_mode="Markdown")
+    return ConversationHandler.END
+
+# ===== פרסום חופשי =====
 
 async def broadcast_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    if not is_admin(query.from_user.id):
-        return
-
     keyboard = [[InlineKeyboardButton("❌ ביטול", callback_data="admin_panel")]]
-    await query.edit_message_text(
-        "📢 *שלח את ההודעה לפרסום:*\n\n"
-        "תוכל לשלוח:\n"
-        "• טקסט\n• תמונה עם כיתוב\n• וידאו עם כיתוב\n\n"
-        "_הפרסום יישלח לכל הערוצים והמשתמשים הרשומים_",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="Markdown"
-    )
+    await query.edit_message_text("📢 *פרסום חופשי*\n\nשלח הודעה, תמונה או וידאו:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
     return BROADCAST_MESSAGE
 
 async def broadcast_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        return ConversationHandler.END
-
     context.user_data['broadcast_msg'] = update.message
-
     channels = db.get_channels()
-    users_count = db.get_users_count()
-    channels_text = "\n".join([f"• {ch['name']}" for ch in channels]) if channels else "• אין ערוצים רשומים"
-
-    keyboard = [
-        [InlineKeyboardButton("✅ אשר פרסום", callback_data="confirm_broadcast"),
-         InlineKeyboardButton("❌ ביטול", callback_data="admin_panel")]
-    ]
+    channels_text = "\n".join([f"• {ch['name']}" for ch in channels]) if channels else "• אין ערוצים"
+    keyboard = [[InlineKeyboardButton("✅ אשר", callback_data="confirm_broadcast"),
+                 InlineKeyboardButton("❌ ביטול", callback_data="admin_panel")]]
     await update.message.reply_text(
-        f"📋 *אישור פרסום:*\n\n"
-        f"👥 משתמשים: {users_count}\n"
-        f"📢 ערוצים:\n{channels_text}\n\n"
-        f"האם לשלוח?",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="Markdown"
+        f"📋 ישלח ל:\n{channels_text}\n👥 {db.get_users_count()} משתמשים\n\nלשלוח?",
+        reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown"
     )
     return BROADCAST_CONFIRM
 
 async def broadcast_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
     msg = context.user_data.get('broadcast_msg')
-    if not msg:
-        await query.edit_message_text("❌ שגיאה: לא נמצאה הודעה לפרסום.")
-        return ConversationHandler.END
-
-    channels = db.get_channels()
-    users = db.get_all_users()
-
-    success = 0
-    failed = 0
-
-    # שליחה לערוצים
-    for channel in channels:
+    success, failed = 0, 0
+    for channel in db.get_channels():
         try:
             if msg.photo:
                 await context.bot.send_photo(channel['chat_id'], msg.photo[-1].file_id, caption=msg.caption)
@@ -138,12 +228,9 @@ async def broadcast_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 await context.bot.send_message(channel['chat_id'], msg.text)
             success += 1
-        except Exception as e:
-            logger.error(f"Failed to send to channel {channel['chat_id']}: {e}")
+        except:
             failed += 1
-
-    # שליחה למשתמשים
-    for user in users:
+    for user in db.get_all_users():
         try:
             if msg.photo:
                 await context.bot.send_photo(user['user_id'], msg.photo[-1].file_id, caption=msg.caption)
@@ -152,77 +239,52 @@ async def broadcast_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 await context.bot.send_message(user['user_id'], msg.text)
             success += 1
-            await asyncio.sleep(0.05)  # מניעת חסימה
-        except Exception as e:
+            await asyncio.sleep(0.05)
+        except:
             failed += 1
-
-    await query.edit_message_text(
-        f"✅ *פרסום הושלם!*\n\n"
-        f"✔️ נשלח בהצלחה: {success}\n"
-        f"❌ נכשל: {failed}",
-        parse_mode="Markdown"
-    )
+    await query.edit_message_text(f"✅ *הושלם!*\n✔️ {success} | ❌ {failed}", parse_mode="Markdown")
     return ConversationHandler.END
 
-# ===================== ניהול ערוצים =====================
+# ===== ניהול ערוצים =====
 
 async def manage_channels(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
     channels = db.get_channels()
-    channels_text = "\n".join([f"• {ch['name']} (`{ch['chat_id']}`)" for ch in channels]) if channels else "אין ערוצים רשומים"
-
+    channels_text = "\n".join([f"• {ch['name']}" for ch in channels]) if channels else "אין ערוצים"
     keyboard = [
-        [InlineKeyboardButton("➕ הוסף ערוץ/קבוצה", callback_data="add_channel")],
-        [InlineKeyboardButton("➖ הסר ערוץ/קבוצה", callback_data="remove_channel")],
+        [InlineKeyboardButton("➕ הוסף", callback_data="add_channel"),
+         InlineKeyboardButton("➖ הסר", callback_data="remove_channel")],
         [InlineKeyboardButton("🔙 חזור", callback_data="admin_panel")]
     ]
-    await query.edit_message_text(
-        f"📋 *ניהול ערוצים וקבוצות*\n\n{channels_text}\n\n"
-        f"_להוסיף ערוץ: הוסף את הבוט כאדמין בערוץ/קבוצה ואז לחץ הוסף_",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="Markdown"
-    )
+    await query.edit_message_text(f"📋 *ניהול ערוצים*\n\n{channels_text}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 async def add_channel_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     keyboard = [[InlineKeyboardButton("❌ ביטול", callback_data="manage_channels")]]
-    await query.edit_message_text(
-        "➕ *הוספת ערוץ/קבוצה*\n\n"
-        "שלח את ה-Chat ID של הערוץ/קבוצה.\n\n"
-        "📌 *איך מוצאים את ה-ID?*\n"
-        "1. הוסף את הבוט `@userinfobot` לערוץ/קבוצה\n"
-        "2. הוא ישלח את ה-ID\n"
-        "3. העתק ושלח כאן (לדוגמה: `-1001234567890`)",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="Markdown"
-    )
+    await query.edit_message_text("➕ שלח Chat ID של הערוץ/קבוצה:\n\nלמצוא: הוסף `@userinfobot` לערוץ", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
     return ADD_CHANNEL
 
 async def add_channel_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id_text = update.message.text.strip()
     try:
-        chat_id = int(chat_id_text)
+        chat_id = int(update.message.text.strip())
         chat = await context.bot.get_chat(chat_id)
         db.add_channel(chat_id, chat.title or str(chat_id))
-        await update.message.reply_text(f"✅ הערוץ/קבוצה *{chat.title}* נוסף בהצלחה!", parse_mode="Markdown")
+        await update.message.reply_text(f"✅ *{chat.title}* נוסף!", parse_mode="Markdown")
     except ValueError:
-        await update.message.reply_text("❌ ID לא תקין. שלח מספר בלבד.")
+        await update.message.reply_text("❌ ID לא תקין.")
     except Exception as e:
-        await update.message.reply_text(f"❌ שגיאה: {str(e)}\n\nוודא שהבוט הוסף כאדמין.")
+        await update.message.reply_text(f"❌ שגיאה: {str(e)}")
     return ConversationHandler.END
 
 async def remove_channel_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
     channels = db.get_channels()
     if not channels:
-        await query.edit_message_text("❌ אין ערוצים להסרה.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 חזור", callback_data="manage_channels")]]))
+        await query.edit_message_text("אין ערוצים.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 חזור", callback_data="manage_channels")]]))
         return ConversationHandler.END
-
     keyboard = [[InlineKeyboardButton(f"🗑 {ch['name']}", callback_data=f"del_channel_{ch['chat_id']}")] for ch in channels]
     keyboard.append([InlineKeyboardButton("❌ ביטול", callback_data="manage_channels")])
     await query.edit_message_text("בחר ערוץ להסרה:", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -233,69 +295,52 @@ async def remove_channel_confirm(update: Update, context: ContextTypes.DEFAULT_T
     await query.answer()
     chat_id = int(query.data.replace("del_channel_", ""))
     db.remove_channel(chat_id)
-    await query.edit_message_text("✅ הערוץ הוסר בהצלחה!")
+    await query.edit_message_text("✅ הוסר!")
     return ConversationHandler.END
 
-# ===================== ניהול משתמשים =====================
+# ===== ניהול משתמשים =====
 
 async def manage_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
-    users_count = db.get_users_count()
-    banned_count = db.get_banned_count()
-
     keyboard = [
-        [InlineKeyboardButton("🚫 חסום משתמש", callback_data="ban_user"),
-         InlineKeyboardButton("✅ שחרר חסום", callback_data="unban_user")],
+        [InlineKeyboardButton("🚫 חסום", callback_data="ban_user"),
+         InlineKeyboardButton("✅ שחרר", callback_data="unban_user")],
         [InlineKeyboardButton("📋 רשימת חסומים", callback_data="list_banned")],
         [InlineKeyboardButton("🔙 חזור", callback_data="admin_panel")]
     ]
     await query.edit_message_text(
-        f"👥 *ניהול משתמשים*\n\n"
-        f"👤 סה\"כ משתמשים: {users_count}\n"
-        f"🚫 חסומים: {banned_count}",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="Markdown"
+        f"👥 *משתמשים*\n\n👤 {db.get_users_count()}\n🚫 {db.get_banned_count()} חסומים",
+        reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown"
     )
 
 async def ban_user_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    keyboard = [[InlineKeyboardButton("❌ ביטול", callback_data="manage_users")]]
-    await query.edit_message_text(
-        "🚫 *חסימת משתמש*\n\nשלח את ה-User ID לחסימה:",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="Markdown"
-    )
+    await query.edit_message_text("🚫 שלח User ID לחסימה:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ ביטול", callback_data="manage_users")]]))
     return BAN_USER
 
 async def ban_user_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         user_id = int(update.message.text.strip())
         db.ban_user(user_id)
-        await update.message.reply_text(f"✅ המשתמש `{user_id}` נחסם.", parse_mode="Markdown")
-    except ValueError:
+        await update.message.reply_text(f"✅ `{user_id}` נחסם.", parse_mode="Markdown")
+    except:
         await update.message.reply_text("❌ ID לא תקין.")
     return ConversationHandler.END
 
 async def unban_user_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    keyboard = [[InlineKeyboardButton("❌ ביטול", callback_data="manage_users")]]
-    await query.edit_message_text(
-        "✅ *שחרור חסום*\n\nשלח את ה-User ID לשחרור:",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="Markdown"
-    )
+    await query.edit_message_text("✅ שלח User ID לשחרור:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ ביטול", callback_data="manage_users")]]))
     return UNBAN_USER
 
 async def unban_user_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         user_id = int(update.message.text.strip())
         db.unban_user(user_id)
-        await update.message.reply_text(f"✅ המשתמש `{user_id}` שוחרר.", parse_mode="Markdown")
-    except ValueError:
+        await update.message.reply_text(f"✅ `{user_id}` שוחרר.", parse_mode="Markdown")
+    except:
         await update.message.reply_text("❌ ID לא תקין.")
     return ConversationHandler.END
 
@@ -303,52 +348,31 @@ async def list_banned(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     banned = db.get_banned_users()
-    if not banned:
-        text = "✅ אין משתמשים חסומים."
-    else:
-        text = "🚫 *משתמשים חסומים:*\n\n" + "\n".join([f"• `{u['user_id']}`" for u in banned])
-    keyboard = [[InlineKeyboardButton("🔙 חזור", callback_data="manage_users")]]
-    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
-
-# ===================== סטטיסטיקות =====================
+    text = "🚫 *חסומים:*\n\n" + "\n".join([f"• `{u['user_id']}`" for u in banned]) if banned else "✅ אין חסומים."
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 חזור", callback_data="manage_users")]]), parse_mode="Markdown")
 
 async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
-    users_count = db.get_users_count()
-    channels_count = len(db.get_channels())
-    banned_count = db.get_banned_count()
-
-    keyboard = [[InlineKeyboardButton("🔙 חזור", callback_data="admin_panel")]]
     await query.edit_message_text(
-        f"📊 *סטטיסטיקות הבוט*\n\n"
-        f"👤 משתמשים רשומים: {users_count}\n"
-        f"📢 ערוצים/קבוצות: {channels_count}\n"
-        f"🚫 משתמשים חסומים: {banned_count}",
-        reply_markup=InlineKeyboardMarkup(keyboard),
+        f"📊 *סטטיסטיקות*\n\n👤 {db.get_users_count()} משתמשים\n📢 {len(db.get_channels())} ערוצים\n🚫 {db.get_banned_count()} חסומים",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 חזור", callback_data="admin_panel")]]),
         parse_mode="Markdown"
     )
-
-# ===================== הצגת ערוצים למשתמש =====================
 
 async def show_channels(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     channels = db.get_channels()
     if not channels:
-        await query.edit_message_text("אין ערוצים/קבוצות עדיין.")
+        await query.edit_message_text("אין ערוצים עדיין.")
         return
-    keyboard = [[InlineKeyboardButton(f"📢 {ch['name']}", url=f"https://t.me/{ch['username']}")] for ch in channels if ch.get('username')]
+    keyboard = [[InlineKeyboardButton(f"📢 {ch['name']}", url=f"https://t.me/{ch.get('username','')}")] for ch in channels if ch.get('username')]
     keyboard.append([InlineKeyboardButton("🔙 חזור", callback_data="back_start")])
-    await query.edit_message_text("📢 *הערוצים והקבוצות שלנו:*", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
-
-# ===================== callback handler =====================
+    await query.edit_message_text("📢 *הערוצים שלנו:*", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    data = query.data
-
+    data = update.callback_query.data
     if data == "admin_panel":
         await show_admin_panel(update, context)
     elif data == "manage_channels":
@@ -364,12 +388,23 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "back_start":
         await start(update, context)
 
-# ===================== הפעלת הבוט =====================
-
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
-    # Conversation handler לפרסום
+    event_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(event_publish_start, pattern="^event_publish$")],
+        states={
+            EVENT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, event_name)],
+            EVENT_DJ: [MessageHandler(filters.TEXT & ~filters.COMMAND, event_dj), CallbackQueryHandler(event_skip_dj, pattern="^skip_dj$")],
+            EVENT_LOCATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, event_location)],
+            EVENT_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, event_date)],
+            EVENT_LINK: [MessageHandler(filters.TEXT & ~filters.COMMAND, event_link), CallbackQueryHandler(event_skip_link, pattern="^skip_link$")],
+            EVENT_FLYER: [MessageHandler(filters.PHOTO, event_flyer), CallbackQueryHandler(event_skip_flyer, pattern="^skip_flyer$")],
+            EVENT_CONFIRM: [CallbackQueryHandler(event_confirm_send, pattern="^confirm_event$")],
+        },
+        fallbacks=[CallbackQueryHandler(callback_handler)],
+    )
+
     broadcast_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(broadcast_start, pattern="^broadcast$")],
         states={
@@ -379,7 +414,6 @@ def main():
         fallbacks=[CallbackQueryHandler(callback_handler)],
     )
 
-    # Conversation handler לערוצים
     channels_conv = ConversationHandler(
         entry_points=[
             CallbackQueryHandler(add_channel_start, pattern="^add_channel$"),
@@ -392,7 +426,6 @@ def main():
         fallbacks=[CallbackQueryHandler(callback_handler)],
     )
 
-    # Conversation handler למשתמשים
     users_conv = ConversationHandler(
         entry_points=[
             CallbackQueryHandler(ban_user_start, pattern="^ban_user$"),
@@ -406,6 +439,7 @@ def main():
     )
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(event_conv)
     app.add_handler(broadcast_conv)
     app.add_handler(channels_conv)
     app.add_handler(users_conv)
