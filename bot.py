@@ -12,6 +12,8 @@ logger = logging.getLogger(__name__)
 
 SUBMIT_TEXT, SUBMIT_PHOTO = range(2)
 REJECT_REASON = 10
+ADD_ADMIN = 20
+REMOVE_ADMIN = 21
 
 def init_db():
     conn = sqlite3.connect("posts.db")
@@ -22,6 +24,29 @@ def init_db():
         text TEXT,
         photo_id TEXT
     )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS admins (
+        user_id INTEGER PRIMARY KEY,
+        username TEXT,
+        added_by INTEGER
+    )""")
+    conn.commit()
+    conn.close()
+
+def get_all_admins():
+    conn = sqlite3.connect("posts.db")
+    rows = conn.execute("SELECT * FROM admins").fetchall()
+    conn.close()
+    return [{"user_id": r[0], "username": r[1], "added_by": r[2]} for r in rows]
+
+def add_admin_db(user_id, username, added_by):
+    conn = sqlite3.connect("posts.db")
+    conn.execute("INSERT OR REPLACE INTO admins VALUES (?,?,?)", (user_id, username, added_by))
+    conn.commit()
+    conn.close()
+
+def remove_admin_db(user_id):
+    conn = sqlite3.connect("posts.db")
+    conn.execute("DELETE FROM admins WHERE user_id=?", (user_id,))
     conn.commit()
     conn.close()
 
@@ -53,7 +78,12 @@ def delete_post(post_id):
     conn.close()
 
 def is_admin(user_id):
-    return user_id in ADMIN_IDS
+    if user_id in ADMIN_IDS:
+        return True
+    conn = sqlite3.connect("posts.db")
+    r = conn.execute("SELECT user_id FROM admins WHERE user_id=?", (user_id,)).fetchone()
+    conn.close()
+    return r is not None
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -61,7 +91,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [
             [InlineKeyboardButton("🎉 שלח מסיבה לפרסום", callback_data="submit_post")],
             [InlineKeyboardButton("📋 ממתינים לאישור", callback_data="pending_list")],
+            [InlineKeyboardButton("👥 ניהול מנהלים", callback_data="manage_admins")] if user.id in ADMIN_IDS else [],
         ]
+        keyboard = [row for row in keyboard if row]
         await update.message.reply_text(
             "👋 שלום " + user.first_name + "!\n\n🛠 פאנל אדמין - מסיבות בישראל",
             reply_markup=InlineKeyboardMarkup(keyboard)
@@ -247,6 +279,85 @@ async def pending_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error("Pending list error: " + str(e))
 
+
+async def manage_admins(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not is_admin(query.from_user.id):
+        return
+    admins = get_all_admins()
+    admins_text = "\n".join(["- @" + a["username"] + " (" + str(a["user_id"]) + ")" for a in admins]) if admins else "אין מנהלים נוספים"
+    keyboard = [
+        [InlineKeyboardButton("➕ הוסף מנהל", callback_data="add_admin")],
+        [InlineKeyboardButton("➖ הסר מנהל", callback_data="remove_admin")],
+        [InlineKeyboardButton("🔙 חזור", callback_data="back_start")],
+    ]
+    await query.edit_message_text(
+        "👥 ניהול מנהלים\n\nמנהלים נוספים:\n" + admins_text,
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def add_admin_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    keyboard = [[InlineKeyboardButton("❌ ביטול", callback_data="manage_admins")]]
+    await query.edit_message_text(
+        "➕ הוספת מנהל\n\nשלח את ה-User ID של המנהל החדש\n\nאיך מוצאים ID: שלח הודעה ל-@userinfobot",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    return ADD_ADMIN
+
+async def add_admin_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    try:
+        new_admin_id = int(update.message.text.strip())
+        if new_admin_id in ADMIN_IDS:
+            await update.message.reply_text("⚠️ המשתמש כבר מנהל ראשי.")
+            return ConversationHandler.END
+        try:
+            chat = await context.bot.get_chat(new_admin_id)
+            username = chat.username or chat.first_name or str(new_admin_id)
+        except:
+            username = str(new_admin_id)
+        add_admin_db(new_admin_id, username, update.effective_user.id)
+        await update.message.reply_text("✅ @" + username + " נוסף כמנהל!")
+        try:
+            await context.bot.send_message(new_admin_id, "🎉 נוספת כמנהל בבוט מסיבות בישראל!\n\nשלח /start כדי להתחיל.")
+        except:
+            pass
+    except ValueError:
+        await update.message.reply_text("❌ ID לא תקין. שלח מספר בלבד.")
+    return ConversationHandler.END
+
+async def remove_admin_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    admins = get_all_admins()
+    if not admins:
+        await query.edit_message_text(
+            "אין מנהלים נוספים להסרה.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 חזור", callback_data="manage_admins")]])
+        )
+        return ConversationHandler.END
+    keyboard = [[InlineKeyboardButton("🗑 @" + a["username"], callback_data="del_admin_" + str(a["user_id"]))] for a in admins]
+    keyboard.append([InlineKeyboardButton("❌ ביטול", callback_data="manage_admins")])
+    await query.edit_message_text("בחר מנהל להסרה:", reply_markup=InlineKeyboardMarkup(keyboard))
+    return REMOVE_ADMIN
+
+async def remove_admin_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    admin_id = int(query.data.replace("del_admin_", ""))
+    remove_admin_db(admin_id)
+    await query.edit_message_text("✅ המנהל הוסר!")
+    try:
+        await context.bot.send_message(admin_id, "❌ הוסרת מרשימת המנהלים בבוט מסיבות בישראל.")
+    except:
+        pass
+    return ConversationHandler.END
+
+
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -268,6 +379,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.callback_query.edit_message_text("בחר פעולה:", reply_markup=InlineKeyboardMarkup(keyboard))
     elif data.startswith("approve_"):
         await approve_post(update, context)
+    elif data == "manage_admins":
+        await manage_admins(update, context)
+    elif data == "add_admin":
+        await add_admin_start(update, context)
+    elif data == "remove_admin":
+        await remove_admin_start(update, context)
 
 def main():
     init_db()
@@ -294,9 +411,22 @@ def main():
         fallbacks=[],
     )
 
+    admin_conv = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(add_admin_start, pattern="^add_admin$"),
+            CallbackQueryHandler(remove_admin_start, pattern="^remove_admin$"),
+        ],
+        states={
+            ADD_ADMIN: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_admin_receive)],
+            REMOVE_ADMIN: [CallbackQueryHandler(remove_admin_confirm, pattern="^del_admin_")],
+        },
+        fallbacks=[CallbackQueryHandler(manage_admins, pattern="^manage_admins$")],
+    )
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(submit_conv)
     app.add_handler(reject_conv)
+    app.add_handler(admin_conv)
     app.add_handler(CallbackQueryHandler(callback_handler))
 
     logger.info("הבוט פועל!")
