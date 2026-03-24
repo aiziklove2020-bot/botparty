@@ -1,158 +1,158 @@
 import logging
-import asyncio
-import random
 import os
-from datetime import time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
-from groq import Groq
+from telegram.ext import (
+    Application, CommandHandler, MessageHandler,
+    CallbackQueryHandler, ContextTypes, filters
+)
 
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN = os.environ["TELEGRAM_TOKEN"]
-GROQ_API_KEY = os.environ["GROQ_API_KEY"]
-ADMIN_IDS = [int(os.environ.get("ADMIN_ID", "5508757120"))]
-GROUP_ID = -1002472743528
+BOT_TOKEN = "8584994045:AAEj-L74fwHLv7M9M7yE5v4i65SuWJy7Koc"
+ADMIN_IDS = [5508757120]
+GROUP_ID = -1001371159295
 
-USED_TOPICS = []
-
-TOPICS_POOL = [
-    "גבולות ותקשורת בעולם BDSM",
-    "Safe Word - למה זה כל כך חשוב?",
-    "ההבדל בין Dom ל-Sub",
-    "Aftercare - מה קורה אחרי הסצנה?",
-    "איך מתחילים לחקור BDSM בבטחה?",
-    "SSC vs RACK - איזה פילוסופיה אתם מאמינים בה?",
-    "Trust - איך בונים אמון בין שותפים?",
-    "Collaring - מה המשמעות של קולר?",
-    "Sub Drop ו-Dom Drop - איך מתמודדים?",
-    "Soft Limits vs Hard Limits",
-    "Online BDSM - האם זה עובד?",
-    "Rope Bondage - אמנות או נשק?",
-    "הסכמה - הבסיס של הכל",
-    "Public Play - כן או לא?",
-    "Switch - להיות גם Dom וגם Sub",
-    "Punishment vs Funishment",
-    "BDSM ובריאות נפשית",
-    "קינקים נפוצים - מה אתם אוהבים?",
-    "איך מוצאים שותף BDSM?",
-    "Scene Planning - איך מתכננים סצנה?",
-    "Power Exchange - מה זה אומר לכם?",
-    "Sadomasochism - כאב כעונג",
-    "BDSM ויחסים רומנטיים",
-    "Fetish - מה ההבדל בין פטיש לקינק?",
-]
-
-def generate_discussion_sync():
-    global USED_TOPICS
-    available = [t for t in TOPICS_POOL if t not in USED_TOPICS]
-    if not available:
-        USED_TOPICS = []
-        available = TOPICS_POOL
-    topic = random.choice(available)
-    USED_TOPICS.append(topic)
-
-    client = Groq(api_key=GROQ_API_KEY)
-    response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[
-            {
-                "role": "user",
-                "content": (
-                    "אתה מנחה קהילת BDSM בישראל. "
-                    "צור דיון יומי מעניין בעברית על הנושא: " + topic + "\n\n"
-                    "הפורמט:\n"
-                    "🔥 נושא הדיון: " + topic + "\n\n"
-                    "[2-3 משפטים על הנושא]\n\n"
-                    "💬 שאלה לקהילה: [שאלה פתוחה מעניינת]\n\n"
-                    "שפה מכבדת ופתוחה. ללא מוסר."
-                )
-            }
-        ],
-        max_tokens=400
-    )
-    return response.choices[0].message.content
-
-async def send_daily_discussion(context: ContextTypes.DEFAULT_TYPE):
-    try:
-        loop = asyncio.get_event_loop()
-        discussion = await loop.run_in_executor(None, generate_discussion_sync)
-        await context.bot.send_message(GROUP_ID, discussion)
-        logger.info("Daily discussion sent!")
-        for admin_id in ADMIN_IDS:
-            try:
-                await context.bot.send_message(admin_id, "✅ הדיון היומי נשלח!")
-            except:
-                pass
-    except Exception as e:
-        logger.error("Error: " + str(e))
-        for admin_id in ADMIN_IDS:
-            try:
-                await context.bot.send_message(admin_id, "❌ שגיאה: " + str(e))
-            except:
-                pass
+# שמירת פרסומים ממתינים בזיכרון
+pending_posts = {}
+post_counter = 0
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    if user.id not in ADMIN_IDS:
-        await update.message.reply_text("👋 הבוט שולח דיון יומי לקהילה בשעה 20:00 🔥")
-        return
-    keyboard = [
-        [InlineKeyboardButton("🔥 שלח דיון עכשיו", callback_data="send_now")],
-        [InlineKeyboardButton("📋 נושאים", callback_data="show_topics")],
-    ]
     await update.message.reply_text(
-        "🛠 פאנל אדמין - בוט דיונים יומיים\n\nדיון נשלח כל יום בשעה 20:00 אוטומטית",
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        "👋 ברוך הבא לבוט מסיבות בישראל!\n\n"
+        "📝 שלח לי תמונה או טקסט של המסיבה שלך ואני אשלח אותו לאישור אדמין.\n\n"
+        "לאחר האישור הפרסום יועלה לקבוצה 🎉"
     )
+
+async def handle_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global post_counter
+    user = update.effective_user
+
+    post_counter += 1
+    post_id = str(post_counter)
+
+    # שמירת הפרסום
+    pending_posts[post_id] = {
+        "user_id": user.id,
+        "user_name": user.full_name,
+        "username": user.username,
+        "message": update.message,
+        "chat_id": update.effective_chat.id
+    }
+
+    # אישור למשתמש
+    await update.message.reply_text(
+        "✅ הפרסום שלך נשלח לאישור!\n"
+        "🙏 תקבל עדכון בקרוב"
+    )
+
+    # שליחה לכל אדמין
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ אשר", callback_data=f"approve_{post_id}"),
+            InlineKeyboardButton("❌ דחה", callback_data=f"reject_{post_id}")
+        ]
+    ])
+
+    admin_text = (
+        f"📬 פרסום חדש ממתין לאישור\n\n"
+        f"👤 משתמש: {user.full_name}\n"
+        f"🔗 יוזר: @{user.username or 'אין'}\n"
+        f"🆔 ID: {user.id}\n\n"
+        f"האם לאשר את הפרסום?"
+    )
+
+    for admin_id in ADMIN_IDS:
+        try:
+            # שליחת ההודעה המקורית לאדמין
+            if update.message.photo:
+                await context.bot.send_photo(
+                    admin_id,
+                    update.message.photo[-1].file_id,
+                    caption=update.message.caption or ""
+                )
+            elif update.message.text:
+                await context.bot.send_message(admin_id, f"📝 תוכן:\n\n{update.message.text}")
+
+            await context.bot.send_message(admin_id, admin_text, reply_markup=keyboard)
+        except Exception as e:
+            logger.error(f"Error sending to admin: {e}")
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+
     if query.from_user.id not in ADMIN_IDS:
+        await query.answer("❌ אין לך הרשאה", show_alert=True)
         return
 
-    if query.data == "send_now":
-        await query.edit_message_text("⏳ מייצר דיון עם AI...")
+    data = query.data
+    action, post_id = data.split("_", 1)
+    post = pending_posts.get(post_id)
+
+    if not post:
+        await query.edit_message_text("⚠️ הפרסום כבר טופל או לא נמצא")
+        return
+
+    if action == "approve":
         try:
-            loop = asyncio.get_event_loop()
-            discussion = await loop.run_in_executor(None, generate_discussion_sync)
-            await context.bot.send_message(GROUP_ID, discussion)
-            await query.edit_message_text(
-                "✅ הדיון נשלח לקבוצה!",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 חזור", callback_data="back")]])
+            original_msg = post["message"]
+            # פרסום לקבוצה
+            if original_msg.photo:
+                await context.bot.send_photo(
+                    GROUP_ID,
+                    original_msg.photo[-1].file_id,
+                    caption=original_msg.caption or ""
+                )
+            elif original_msg.text:
+                await context.bot.send_message(GROUP_ID, original_msg.text)
+
+            # עדכון אדמין
+            await query.edit_message_text(f"✅ הפרסום אושר ופורסם בקבוצה!")
+
+            # עדכון משתמש
+            await context.bot.send_message(
+                post["user_id"],
+                "🎉 הפרסום שלך אושר ופורסם בקבוצה!"
             )
         except Exception as e:
-            await query.edit_message_text("❌ שגיאה: " + str(e))
+            await query.edit_message_text(f"❌ שגיאה בפרסום: {str(e)}")
 
-    elif query.data == "show_topics":
-        topics_text = "\n".join(["• " + t for t in TOPICS_POOL[:12]])
-        await query.edit_message_text(
-            "📋 נושאים:\n\n" + topics_text,
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 חזור", callback_data="back")]])
-        )
+    elif action == "reject":
+        await query.edit_message_text(f"❌ הפרסום נדחה")
+        try:
+            await context.bot.send_message(
+                post["user_id"],
+                "😔 הפרסום שלך נדחה על ידי האדמין"
+            )
+        except:
+            pass
 
-    elif query.data == "back":
-        keyboard = [
-            [InlineKeyboardButton("🔥 שלח דיון עכשיו", callback_data="send_now")],
-            [InlineKeyboardButton("📋 נושאים", callback_data="show_topics")],
-        ]
-        await query.edit_message_text(
-            "🛠 פאנל אדמין - בוט דיונים",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+    # מחיקה מהרשימה
+    pending_posts.pop(post_id, None)
+
+async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id not in ADMIN_IDS:
+        return
+
+    pending_count = len(pending_posts)
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"📋 פרסומים ממתינים ({pending_count})", callback_data="list_pending")]
+    ])
+    await update.message.reply_text(
+        "🛠 פאנל אדמין - בוט מסיבות\n\n"
+        f"📬 פרסומים ממתינים: {pending_count}",
+        reply_markup=keyboard
+    )
 
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
-    app.job_queue.run_daily(
-        send_daily_discussion,
-        time=time(hour=20, minute=0),
-        name="daily_discussion"
-    )
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("admin", admin_panel))
     app.add_handler(CallbackQueryHandler(callback_handler))
-    logger.info("בוט דיונים פועל!")
+    app.add_handler(MessageHandler(filters.PHOTO | filters.TEXT & ~filters.COMMAND, handle_post))
+    logger.info("בוט מסיבות פועל!")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
